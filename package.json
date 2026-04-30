@@ -1,5 +1,5 @@
 {
-  "name": "claude-session-viewer",
+  "name": "claude-session-browser",
   "version": "1.0.0",
   "description": "Browse and share Claude Code sessions with a beautiful UI",
   "author": "Liction",
@@ -21,10 +21,29 @@
     "anthropic"
   ],
   "main": "./out/main/index.js",
+  "bin": {
+    "claude-session-browser": "./bin/cli.js"
+  },
+  "files": [
+    "out/main",
+    "out/preload",
+    "out/renderer",
+    "bin",
+    "build/icon.png",
+    "build/icon.ico",
+    "build/icon.icns",
+    "build/icon.svg",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "start": "electron .",
+    "prepublishOnly": "electron-vite build",
     "package": "electron-vite build && electron-builder --win --dir",
     "package:installer": "electron-vite build && electron-builder --win",
     "build:icons": "sharp -i build/icon.svg -o build/icon.png resize 1024 1024 && electron-icon-builder --input=build/icon.png --output=build && node -e \"require('fs').copyFileSync('build/icons/win/icon.ico','build/icon.ico'); require('fs').copyFileSync('build/icons/mac/icon.icns','build/icon.icns')\""
@@ -75,6 +94,7 @@
     "@tanstack/react-virtual": "^3.13.6",
     "ansi-to-html": "^0.7.2",
     "date-fns": "^4.1.0",
+    "electron": "^33.4.0",
     "marked": "^15.0.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -91,7 +111,6 @@
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.4.1",
     "autoprefixer": "^10.4.21",
-    "electron": "^33.4.0",
     "electron-builder": "^25.1.8",
     "electron-icon-builder": "^2.0.1",
     "electron-vite": "^3.1.0",

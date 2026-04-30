@@ -55,7 +55,15 @@ Claude Code's `/export` only produces plain text — you can't see thinking bloc
 - Node.js >= 18
 - npm >= 9
 
-### Install & run
+### Run via npm (no clone needed)
+
+```bash
+npx claude-session-browser
+```
+
+The first run downloads Electron (~100 MB) and caches it; subsequent launches are instant.
+
+### Build from source
 
 ```bash
 # Clone

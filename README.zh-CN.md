@@ -55,7 +55,15 @@ Claude Code 的 `/export` 只能导出纯文本，无法直观查看对话过程
 - Node.js >= 18
 - npm >= 9
 
-### 安装与运行
+### 通过 npm 运行（无需克隆）
+
+```bash
+npx claude-session-browser
+```
+
+首次运行会下载 Electron（约 100 MB）并缓存，之后启动即开即用。
+
+### 从源码构建
 
 ```bash
 # 克隆项目
