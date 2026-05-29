@@ -46,6 +46,11 @@ const TOOL_COLORS: Record<string, string> = {
   TaskUpdate: 'csv-tool-todo',
   TaskList: 'csv-tool-todo',
   TaskGet: 'csv-tool-todo',
+  TaskOutput: 'csv-tool-todo',
+  TaskStop: 'csv-tool-todo',
+  TeamCreate: 'csv-tool-team',
+  TeamDelete: 'csv-tool-team',
+  SendMessage: 'csv-tool-message',
   LSP: 'csv-tool-lsp',
   Skill: 'csv-tool-skill',
   NotebookEdit: 'csv-tool-notebook'
@@ -99,7 +104,28 @@ function getToolSummary(block: ToolUseBlock): string {
     return `${todos.length} items (${counts.completed} done, ${counts.in_progress} active, ${counts.pending} pending)`
   }
   if (block.name === 'TaskCreate' && input.subject) return String(input.subject)
-  if (block.name === 'TaskUpdate') return `#${input.taskId || ''} → ${input.status || ''}`
+  if (block.name === 'TaskUpdate') {
+    const parts = [`#${input.taskId || ''}`]
+    if (input.status) parts.push(String(input.status))
+    if (input.owner) parts.push(`@${input.owner}`)
+    if (input.subject) parts.push(String(input.subject))
+    return parts.join(' · ')
+  }
+  if (block.name === 'TaskGet' && input.taskId) return `#${input.taskId}`
+  if ((block.name === 'TaskOutput' || block.name === 'TaskStop') && input.task_id)
+    return String(input.task_id)
+  if (block.name === 'TeamCreate' && input.team_name) return `create team: ${input.team_name}`
+  if (block.name === 'TeamDelete') return 'cleanup team'
+  if (block.name === 'SendMessage') {
+    const to = input.to ? `→ ${input.to}` : ''
+    const msg = input.message
+    if (typeof msg === 'object' && msg !== null) {
+      const type = (msg as { type?: string }).type
+      if (type) return `${to} (${type.replace(/_/g, ' ')})`
+    }
+    const summary = input.summary ? `: ${input.summary}` : ''
+    return `${to}${summary}`
+  }
   return ''
 }
 
@@ -160,6 +186,12 @@ function renderToolContent(block: ToolUseBlock) {
     case 'TaskUpdate':
     case 'TaskList':
     case 'TaskGet': return <TaskContent block={block} />
+    case 'TaskOutput':
+    case 'TaskStop': return <BackgroundTaskContent block={block} />
+    case 'TeamCreate': return <TeamCreateContent block={block} />
+    case 'TeamDelete': return <TeamDeleteContent block={block} />
+    case 'SendMessage': return <SendMessageContent block={block} />
+    case 'Agent': return <AgentContent block={block} />
     default: return <GenericToolContent block={block} />
   }
 }
@@ -614,10 +646,331 @@ function TaskContent({ block }: { block: ToolUseBlock }) {
     )
   }
 
-  // TaskList / TaskGet — show result nicely
+  if (block.name === 'TaskGet') {
+    const task = getStructured<{ task?: TaskItem }>(block)?.task
+    return (
+      <div className="px-3 py-2">
+        {task ? <TaskRow task={task} /> : block.result && <ToolResultDisplay result={block.result} />}
+      </div>
+    )
+  }
+
+  // TaskList — render the structured task list as rows
+  const tasks = getStructured<{ tasks?: TaskItem[] }>(block)?.tasks
+  return (
+    <div className="px-3 py-2 space-y-1">
+      {tasks && tasks.length > 0 ? (
+        tasks.map((t) => <TaskRow key={t.id} task={t} />)
+      ) : tasks && tasks.length === 0 ? (
+        <div className="text-xs text-gray-500">No tasks</div>
+      ) : (
+        block.result && <ToolResultDisplay result={block.result} />
+      )}
+    </div>
+  )
+}
+
+interface TaskItem {
+  id: string
+  subject?: string
+  description?: string
+  status?: string
+  owner?: string
+  blockedBy?: string[]
+  blocks?: string[]
+}
+
+/** Read the rich structured tool result (toolUseResult), falling back to parsing content JSON */
+function getStructured<T>(block: ToolUseBlock): T | undefined {
+  const s = block.result?.structured
+  if (s && typeof s === 'object') return s as T
+  // Fallback: some results are a JSON string in content
+  const content = block.result?.content
+  if (typeof content === 'string' && content.trim().startsWith('{')) {
+    try {
+      return JSON.parse(content) as T
+    } catch {
+      /* not JSON */
+    }
+  }
+  return undefined
+}
+
+/** Inline error banner for tools whose custom renderer otherwise hides the result */
+function ToolErrorBanner({ block }: { block: ToolUseBlock }) {
+  if (!block.result?.is_error) return null
+  const msg = block.result.content || block.result.stderr || 'Error'
+  return (
+    <div className="flex items-start gap-2 rounded-lg px-2.5 py-2 border text-xs bg-red-900/15 border-red-700/40 text-red-300 whitespace-pre-wrap break-words">
+      <span className="flex-shrink-0">{'❌'}</span>
+      <div className="min-w-0">{msg}</div>
+    </div>
+  )
+}
+
+/** A single task line: status icon, id, subject, owner, blocked indicator */
+function TaskRow({ task }: { task: TaskItem }) {
+  const st = STATUS_STYLES[task.status || 'pending'] || STATUS_STYLES.pending
+  const blocked = (task.blockedBy || []).length > 0
+  return (
+    <div className="flex items-start gap-2 bg-[#0d1117] rounded-lg px-2.5 py-1.5 border border-[#30363d]">
+      <span className="text-sm flex-shrink-0">{st.icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] text-[var(--accent)] font-mono">#{task.id}</span>
+          <span className="text-xs text-[var(--text)]">{task.subject || 'Untitled'}</span>
+        </div>
+        {task.description && <div className="text-[10px] text-gray-500 mt-0.5">{task.description}</div>}
+      </div>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        {task.owner && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)]">@{task.owner}</span>
+        )}
+        {blocked && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-900/20 text-yellow-400" title={`blocked by ${task.blockedBy!.join(', ')}`}>
+            {'⛔'} {task.blockedBy!.join(',')}
+          </span>
+        )}
+        <span className={`text-[10px] ${st.color}`}>{task.status}</span>
+      </div>
+    </div>
+  )
+}
+
+/** TaskOutput / TaskStop — background task status */
+function BackgroundTaskContent({ block }: { block: ToolUseBlock }) {
+  const result = getStructured<{
+    message?: string
+    task_id?: string
+    task_type?: string
+    command?: string
+    retrieval_status?: string
+    task?: { task_id?: string; task_type?: string; status?: string; description?: string; output?: string; exitCode?: number | null }
+  }>(block)
+  const task = result?.task
+  const status = task?.status || result?.retrieval_status
+  const command = result?.command || (task as { command?: string } | undefined)?.command
+  const output = task?.output
+
+  return (
+    <div className="px-3 py-2 space-y-2">
+      <ToolErrorBanner block={block} />
+      <div className="flex items-center gap-2 flex-wrap text-xs">
+        <span className="text-gray-500">Task</span>
+        <span className="text-[var(--accent)] font-mono">{result?.task_id || task?.task_id || ''}</span>
+        {(task?.task_type || result?.task_type) && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#161b22] text-gray-400">{task?.task_type || result?.task_type}</span>
+        )}
+        {status && <span className="text-gray-400">· {status}</span>}
+        {typeof task?.exitCode === 'number' && (
+          <span className={task.exitCode === 0 ? 'text-green-400' : 'text-red-400'}>exit {task.exitCode}</span>
+        )}
+      </div>
+      {(result?.message || task?.description) && (
+        <div className="text-xs text-gray-400">{result?.message || task?.description}</div>
+      )}
+      {command && (
+        <pre className="bg-[#0d1117] rounded p-2 text-xs overflow-x-auto text-green-300 font-mono border border-[#30363d]">
+          <code>$ {command}</code>
+        </pre>
+      )}
+      {output && (
+        <pre className="bg-[#0d1117] rounded p-2 text-xs overflow-x-auto max-h-60 overflow-y-auto text-[#e6edf3] border border-[#30363d]">
+          <code>{output}</code>
+        </pre>
+      )}
+      {!result && block.result && <ToolResultDisplay result={block.result} />}
+    </div>
+  )
+}
+
+/** TeamCreate — show the new team with its lead agent */
+function TeamCreateContent({ block }: { block: ToolUseBlock }) {
+  const input = block.input || {}
+  const teamName = String(input.team_name || '')
+  const description = input.description ? String(input.description) : ''
+  const result = getStructured<{ team_name?: string; team_file_path?: string; lead_agent_id?: string }>(block)
+
+  return (
+    <div className="px-3 py-2 space-y-2">
+      <ToolErrorBanner block={block} />
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-sm">{'👥'}</span>
+        <span className="text-xs text-[var(--text)] font-medium">{result?.team_name || teamName}</span>
+        {result?.lead_agent_id && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#ff8c5a]/15 text-[#ff8c5a]">lead: {result.lead_agent_id}</span>
+        )}
+      </div>
+      {description && <div className="text-[10px] text-gray-500">{description}</div>}
+      {result?.team_file_path && (
+        <div className="text-[10px] text-gray-600 font-mono break-all">{result.team_file_path}</div>
+      )}
+      {!result && block.result && <ToolResultDisplay result={block.result} />}
+    </div>
+  )
+}
+
+/** TeamDelete — show cleanup outcome (often a refusal while members are active) */
+function TeamDeleteContent({ block }: { block: ToolUseBlock }) {
+  const result = getStructured<{ success?: boolean; message?: string; team_name?: string }>(block)
+  if (!result) {
+    return <div className="px-3 py-2">{block.result && <ToolResultDisplay result={block.result} />}</div>
+  }
+  const ok = result.success
   return (
     <div className="px-3 py-2">
-      {block.result && <ToolResultDisplay result={block.result} />}
+      <div className={`flex items-start gap-2 rounded-lg px-2.5 py-2 border text-xs ${
+        ok ? 'bg-green-900/15 border-green-700/40 text-green-300' : 'bg-yellow-900/15 border-yellow-700/40 text-yellow-300'
+      }`}>
+        <span className="flex-shrink-0">{ok ? '✅' : '⚠️'}</span>
+        <div className="min-w-0">
+          {result.team_name && <span className="font-medium">{result.team_name}: </span>}
+          {result.message}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** SendMessage — inter-agent message with routing (sender → target) */
+function SendMessageContent({ block }: { block: ToolUseBlock }) {
+  const input = block.input || {}
+  const to = input.to ? String(input.to) : ''
+  const rawMsg = input.message
+  const structuredMsg = typeof rawMsg === 'object' && rawMsg !== null
+    ? (rawMsg as { type?: string; reason?: string; approve?: boolean; feedback?: string })
+    : null
+  const textMsg = typeof rawMsg === 'string' ? rawMsg : String(input.content || '')
+  const summary = input.summary ? String(input.summary) : ''
+
+  const result = getStructured<{
+    success?: boolean
+    message?: string
+    routing?: { sender?: string; target?: string; targetColor?: string; summary?: string; content?: string }
+  }>(block)
+  const routing = result?.routing
+  const sender = routing?.sender
+  const target = routing?.target || (to ? `@${to}` : '')
+  const body = routing?.content || textMsg
+
+  return (
+    <div className="px-3 py-2 space-y-2">
+      <ToolErrorBanner block={block} />
+      {/* routing header */}
+      <div className="flex items-center gap-2 flex-wrap text-xs">
+        {sender && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#161b22] text-gray-300">{sender}</span>}
+        <span className="text-gray-500">{'→'}</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#5abeff]/15 text-[#5abeff]">{target}</span>
+        {(summary || routing?.summary) && (
+          <span className="text-gray-500 italic">{summary || routing?.summary}</span>
+        )}
+      </div>
+
+      {/* structured protocol message (shutdown / plan approval) */}
+      {structuredMsg && (
+        <div className="bg-[#0d1117] rounded-lg p-2.5 border border-[#30363d] text-xs space-y-1">
+          <div className="text-[var(--accent)] font-medium">{structuredMsg.type?.replace(/_/g, ' ')}</div>
+          {typeof structuredMsg.approve === 'boolean' && (
+            <div className={structuredMsg.approve ? 'text-green-400' : 'text-red-400'}>
+              {structuredMsg.approve ? '✅ approved' : '❌ rejected'}
+            </div>
+          )}
+          {structuredMsg.reason && <div className="text-gray-400">{structuredMsg.reason}</div>}
+          {structuredMsg.feedback && <div className="text-gray-400">{structuredMsg.feedback}</div>}
+        </div>
+      )}
+
+      {/* plain text body */}
+      {body && (
+        <div className="bg-[#0d1117] rounded-lg p-2.5 border border-[#30363d] text-xs text-[var(--text2)] whitespace-pre-wrap break-words">
+          {body}
+        </div>
+      )}
+
+      {/* delivery status */}
+      {result?.message && (
+        <div className="text-[10px] text-gray-500">{result.success === false ? '⚠️ ' : ''}{result.message}</div>
+      )}
+    </div>
+  )
+}
+
+/** Agent — sub-agent dispatch with prompt + result summary */
+function AgentContent({ block }: { block: ToolUseBlock }) {
+  const input = block.input || {}
+  const description = input.description ? String(input.description) : ''
+  const subagentType = input.subagent_type ? String(input.subagent_type) : ''
+  const prompt = input.prompt ? String(input.prompt) : ''
+  const { displayContent: promptShown, TruncateBar: PromptTruncate } = useTruncated(prompt)
+
+  const result = getStructured<{
+    status?: string
+    agentId?: string
+    agentType?: string
+    content?: Array<{ text?: string }> | string
+    totalDurationMs?: number
+    totalTokens?: number
+    totalToolUseCount?: number
+  }>(block)
+
+  const resultText = result
+    ? Array.isArray(result.content)
+      ? result.content.map((c) => c.text || '').join('\n')
+      : typeof result.content === 'string'
+        ? result.content
+        : ''
+    : block.result?.stdout || block.result?.content || ''
+  const { displayContent: resultShown, TruncateBar: ResultTruncate } = useTruncated(resultText)
+
+  return (
+    <div className="px-3 py-2 space-y-2">
+      <ToolErrorBanner block={block} />
+      <div className="flex items-center gap-2 flex-wrap text-xs">
+        {(subagentType || result?.agentType) && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e86eaa]/15 text-[#e86eaa] font-medium">{subagentType || result?.agentType}</span>
+        )}
+        {description && <span className="text-[var(--text)]">{description}</span>}
+        {result?.status && (
+          <span className={result.status === 'completed' ? 'text-green-400' : 'text-blue-400'}>· {result.status}</span>
+        )}
+      </div>
+
+      {/* stats */}
+      {result && (result.totalTokens || result.totalToolUseCount || result.totalDurationMs) && (
+        <div className="flex items-center gap-3 text-[10px] text-gray-500">
+          {result.totalToolUseCount != null && <span>{result.totalToolUseCount} tool calls</span>}
+          {result.totalTokens != null && <span>{result.totalTokens.toLocaleString()} tokens</span>}
+          {result.totalDurationMs != null && <span>{(result.totalDurationMs / 1000).toFixed(1)}s</span>}
+        </div>
+      )}
+
+      {/* prompt */}
+      {prompt && (
+        <div className="rounded-lg overflow-hidden border border-[#30363d] bg-[#0d1117]">
+          <div className="flex items-center justify-between px-3 py-1 bg-[#161b22] border-b border-[#30363d]">
+            <span className="text-xs text-gray-500">Prompt</span>
+            <CopyButton text={prompt} />
+          </div>
+          <pre className="p-2 text-xs overflow-x-auto max-h-60 overflow-y-auto text-[#e6edf3] whitespace-pre-wrap break-words">
+            <code>{promptShown}</code>
+          </pre>
+          <PromptTruncate />
+        </div>
+      )}
+
+      {/* result */}
+      {resultText && (
+        <div className="rounded-lg overflow-hidden border border-[#30363d] bg-[#0d1117]">
+          <div className="flex items-center justify-between px-3 py-1 bg-[#161b22] border-b border-[#30363d]">
+            <span className="text-xs text-gray-500">Result{result?.agentId ? ` · ${result.agentId}` : ''}</span>
+            <CopyButton text={resultText} />
+          </div>
+          <pre className="p-2 text-xs overflow-x-auto max-h-80 overflow-y-auto text-[#e6edf3] whitespace-pre-wrap break-words">
+            <code>{resultShown}</code>
+          </pre>
+          <ResultTruncate />
+        </div>
+      )}
     </div>
   )
 }

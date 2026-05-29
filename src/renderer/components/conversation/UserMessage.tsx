@@ -2,6 +2,7 @@ import { memo, useMemo, useState } from 'react'
 import Convert from 'ansi-to-html'
 import type { ParsedMessage, ImageBlock } from '../../types/message'
 import { MarkdownRenderer } from './MarkdownRenderer'
+import { TeammateMessage, parseTeammateMessages } from './TeammateMessage'
 
 interface Props {
   message: ParsedMessage
@@ -84,9 +85,17 @@ export const UserMessage = memo(function UserMessage({ message }: Props) {
   const images = message.content.filter((b) => b.type === 'image') as ImageBlock[]
   const time = message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''
 
+  // Teammate (swarm) messages are delivered as user-role text containing
+  // <teammate-message> tags. Render them with a dedicated component.
+  const teammateMessages = useMemo(() => (text.includes('<teammate-message') ? parseTeammateMessages(text) : []), [text])
+
   // Hide caveat-only messages (system notes telling the model not to respond)
   if (images.length === 0 && isCaveatOnly(text)) {
     return null
+  }
+
+  if (teammateMessages.length > 0 && images.length === 0) {
+    return <TeammateMessage messages={teammateMessages} timestamp={message.timestamp} />
   }
 
   const command = parseSlashCommand(text)

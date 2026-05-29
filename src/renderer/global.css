@@ -446,6 +446,8 @@ pre { white-space: pre-wrap; word-break: break-all; }
 .csv-tool-lsp     { background: rgba( 90,160,230, 0.14); color: #5aa0e6;       border-color: rgba( 90,160,230, 0.28); }
 .csv-tool-skill   { background: rgba(220,170, 70, 0.14); color: #dcaa46;       border-color: rgba(220,170, 70, 0.28); }
 .csv-tool-notebook{ background: rgba(160,120,230, 0.14); color: #a078e6;       border-color: rgba(160,120,230, 0.28); }
+.csv-tool-team    { background: rgba(255,140, 90, 0.14); color: #ff8c5a;       border-color: rgba(255,140, 90, 0.28); }
+.csv-tool-message { background: rgba( 90,190,255, 0.14); color: #5abeff;       border-color: rgba( 90,190,255, 0.28); }
 
 /* Smooth global transitions (selectors that frequently get class flips) */
 button, [role="button"], a {

@@ -3,6 +3,8 @@ export interface ToolResult {
   is_error?: boolean
   stdout?: string
   stderr?: string
+  /** Rich structured result object (toolUseResult) for tools like Agent / SendMessage / Task* */
+  structured?: unknown
 }
 
 export interface TextBlock {

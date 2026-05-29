@@ -7,6 +7,8 @@ export interface ToolResult {
   is_error?: boolean
   stdout?: string
   stderr?: string
+  /** Rich structured result object (toolUseResult) for tools like Agent / SendMessage / Task* */
+  structured?: unknown
 }
 
 export interface ContentBlock {
@@ -335,6 +337,11 @@ function pairToolResults(
             | undefined
           const resultContent =
             typeof item.content === 'string' ? item.content : JSON.stringify(item.content)
+          const isStructured =
+            typeof rawResult === 'object' &&
+            rawResult !== null &&
+            rawResult.stdout === undefined &&
+            rawResult.stderr === undefined
 
           toolBlock.result = {
             content: resultContent || '',
@@ -346,7 +353,11 @@ function pairToolResults(
             stderr:
               typeof rawResult === 'object' && rawResult
                 ? (rawResult.stderr as string)
-                : undefined
+                : undefined,
+            // Keep the full structured object so rich renderers (team/task tools)
+            // can read routing, tasks, team_name, etc. Plain {stdout,stderr}
+            // results are already covered above, so skip those.
+            structured: isStructured ? rawResult : undefined
           }
         }
       }

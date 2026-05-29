@@ -78,6 +78,8 @@ const TOOL_COLORS: Record<string, string> = {
   Glob: '#0e7490', Grep: '#0d9488', WebFetch: '#4f46e5', WebSearch: '#4f46e5',
   Agent: '#be185d', AskUserQuestion: '#ca8a04', TodoWrite: '#059669',
   TaskCreate: '#059669', TaskUpdate: '#059669', TaskList: '#059669', TaskGet: '#059669',
+  TaskOutput: '#059669', TaskStop: '#059669',
+  TeamCreate: '#d2603a', TeamDelete: '#d2603a', SendMessage: '#0ea5e9',
   LSP: '#0284c7', Skill: '#d97706', NotebookEdit: '#7c3aed'
 }
 
@@ -424,6 +426,97 @@ function isCaveatOnly(text: string): boolean {
 }
 
 // =============================================================
+// Teammate (swarm) messages — <teammate-message teammate_id=... color=... summary=...>
+// =============================================================
+interface TeammateMsg {
+  teammateId: string
+  color?: string
+  summary?: string
+  content: string
+}
+
+const AGENT_COLORS: Record<string, string> = {
+  red: '#ff7b72', green: '#7ee787', yellow: '#e3b341', blue: '#58a6ff',
+  magenta: '#d2a8ff', cyan: '#56d4dd', white: '#c9d1d9', gray: '#8b949e',
+  grey: '#8b949e', orange: '#ff8c5a', purple: '#bc8cff', pink: '#f778ba'
+}
+
+function teammateColor(name?: string): string {
+  if (!name) return '#56d4dd'
+  return AGENT_COLORS[name.toLowerCase()] || '#56d4dd'
+}
+
+// Lifecycle noise that claude-code processes silently (hidden from the transcript).
+const HIDDEN_TEAMMATE_TYPES = new Set(['idle_notification', 'teammate_terminated', 'shutdown_approved'])
+
+function isTeammateNoise(content: string): boolean {
+  if (!content.startsWith('{')) return false
+  try {
+    const t = (JSON.parse(content) as { type?: string }).type
+    return typeof t === 'string' && HIDDEN_TEAMMATE_TYPES.has(t)
+  } catch {
+    return false
+  }
+}
+
+function parseTeammateMessages(text: string): TeammateMsg[] {
+  const re = /<teammate-message\s+teammate_id="([^"]+)"(?:\s+color="([^"]+)")?(?:\s+summary="([^"]+)")?>\n?([\s\S]*?)\n?<\/teammate-message>/g
+  const out: TeammateMsg[] = []
+  for (const m of text.matchAll(re)) {
+    if (m[1] && m[4]) {
+      const content = m[4].trim()
+      if (isTeammateNoise(content)) continue
+      out.push({ teammateId: m[1], color: m[2], summary: m[3], content })
+    }
+  }
+  return out
+}
+
+function renderTeammateRow(msg: TeammateMsg): string {
+  const color = teammateColor(msg.color)
+  const name = escapeHtml(msg.teammateId)
+  let json: Record<string, unknown> | null = null
+  if (msg.content.startsWith('{')) {
+    try { json = JSON.parse(msg.content) } catch { /* not JSON */ }
+  }
+  const type = json?.type as string | undefined
+
+  const header = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+    <span style="font-size:12px;font-weight:600;color:${color}">@${name}</span>
+    ${msg.summary ? `<span style="font-size:11px;color:var(--text3);font-style:italic">${escapeHtml(msg.summary)}</span>` : ''}
+  </div>`
+
+  const card = (borderColor: string, inner: string) =>
+    `<div style="border:1px solid var(--border);border-left:3px solid ${borderColor};border-radius:6px;padding:8px 12px;background:var(--surface)">${header}${inner}</div>`
+
+  if (type === 'task_assignment') {
+    return card('#56d4dd', `<div style="font-size:12px;color:var(--text)"><span style="color:#56d4dd;font-weight:500">Task #${escapeHtml(String(json?.taskId ?? ''))}</span>${json?.assignedBy ? ` <span style="color:var(--text3)">assigned by ${escapeHtml(String(json.assignedBy))}</span>` : ''}</div>
+      ${json?.subject ? `<div style="font-size:12px;color:var(--text);font-weight:500;margin-top:4px">${escapeHtml(String(json.subject))}</div>` : ''}
+      ${json?.description ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHtml(String(json.description))}</div>` : ''}`)
+  }
+  if (type === 'plan_approval_response') {
+    const approved = json?.approved === true || json?.approve === true
+    return card(approved ? '#3fb950' : '#f85149', `<div style="font-size:12px;font-weight:500;color:${approved ? '#3fb950' : '#f85149'}">${approved ? '✓ Plan approved' : '✗ Plan rejected'}</div>${json?.feedback ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">Feedback: ${escapeHtml(String(json.feedback))}</div>` : ''}`)
+  }
+  if (type === 'shutdown_request' || type === 'shutdown_rejected' || type === 'shutdown_approved') {
+    const palette: Record<string, { c: string; label: string }> = {
+      shutdown_request: { c: '#d29922', label: 'Shutdown requested' },
+      shutdown_rejected: { c: '#8b949e', label: 'Shutdown rejected' },
+      shutdown_approved: { c: '#3fb950', label: 'Shutdown approved' }
+    }
+    const p = palette[type]
+    return card(p.c, `<div style="font-size:12px;font-weight:500;color:${p.c}">${p.label}${json?.from ? ` <span style="color:var(--text3);font-weight:400">— ${escapeHtml(String(json.from))}</span>` : ''}</div>${json?.reason ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">Reason: ${escapeHtml(String(json.reason))}</div>` : ''}`)
+  }
+  if (type === 'task_completed') {
+    return card('#3fb950', `<div style="font-size:12px;color:#3fb950">✓ Completed task #${escapeHtml(String(json?.taskId ?? ''))}${json?.taskSubject ? ` <span style="color:var(--text3)">(${escapeHtml(String(json.taskSubject))})</span>` : ''}</div>`)
+  }
+  if (json && type) {
+    return card(color, `<div style="font-size:12px;color:var(--accent);font-weight:500">${escapeHtml(type.replace(/_/g, ' '))}</div><pre style="font-size:10px;color:var(--text3);margin-top:4px;overflow-x:auto"><code>${escapeHtml(JSON.stringify(json, null, 2))}</code></pre>`)
+  }
+  return card(color, `<div style="font-size:13px;color:var(--text)">${renderMarkdown(msg.content)}</div>`)
+}
+
+// =============================================================
 // Truncation helper (mirrors UI 15K threshold)
 // =============================================================
 const TRUNCATE = 15000
@@ -476,6 +569,19 @@ function getToolSummary(block: ContentBlock): string {
   }
   if (name === 'TaskCreate' && input.subject) return String(input.subject)
   if (name === 'TaskUpdate') return `#${input.taskId || ''} → ${input.status || ''}`
+  if (name === 'TaskGet' && input.taskId) return `#${input.taskId}`
+  if ((name === 'TaskOutput' || name === 'TaskStop') && input.task_id) return String(input.task_id)
+  if (name === 'TeamCreate' && input.team_name) return `create team: ${input.team_name}`
+  if (name === 'TeamDelete') return 'cleanup team'
+  if (name === 'SendMessage') {
+    const to = input.to ? `→ ${input.to}` : ''
+    const msg = input.message
+    if (typeof msg === 'object' && msg !== null) {
+      const type = (msg as { type?: string }).type
+      if (type) return `${to} (${type.replace(/_/g, ' ')})`
+    }
+    return input.summary ? `${to}: ${input.summary}` : to
+  }
   return ''
 }
 
@@ -793,6 +899,16 @@ function renderTaskTool(block: ContentBlock): string {
     ${renderToolResult(block.result)}`
   }
 
+  if (name === 'TaskGet') {
+    const task = getExpStructured<{ task?: ExpTaskItem }>(block)?.task
+    return task ? renderTaskRow(task) : renderToolResult(block.result)
+  }
+
+  // TaskList
+  const tasks = getExpStructured<{ tasks?: ExpTaskItem[] }>(block)?.tasks
+  if (tasks && tasks.length > 0) return tasks.map(renderTaskRow).join('')
+  if (tasks && tasks.length === 0) return `<div class="muted" style="font-size:12px">No tasks</div>`
+
   return renderToolResult(block.result)
 }
 
@@ -823,8 +939,146 @@ function renderToolBody(block: ContentBlock): string {
     case 'TaskUpdate':
     case 'TaskList':
     case 'TaskGet': return renderTaskTool(block)
+    case 'TeamCreate': return renderTeamCreateTool(block)
+    case 'TeamDelete': return renderTeamDeleteTool(block)
+    case 'SendMessage': return renderSendMessageTool(block)
+    case 'Agent': return renderAgentTool(block)
     default: return renderGenericTool(block)
   }
+}
+
+interface ExpTaskItem {
+  id: string
+  subject?: string
+  description?: string
+  status?: string
+  owner?: string
+  blockedBy?: string[]
+}
+
+/** Read the structured tool result, with a JSON-string fallback */
+function getExpStructured<T>(block: ContentBlock): T | undefined {
+  const s = block.result?.structured
+  if (s && typeof s === 'object') return s as T
+  const content = block.result?.content
+  if (typeof content === 'string' && content.trim().startsWith('{')) {
+    try {
+      return JSON.parse(content) as T
+    } catch {
+      /* not JSON */
+    }
+  }
+  return undefined
+}
+
+function renderTaskRow(task: ExpTaskItem): string {
+  const st = STATUS_STYLES[task.status || 'pending'] || STATUS_STYLES.pending
+  const blocked = (task.blockedBy || []).length > 0
+  return `<div style="display:flex;gap:8px;align-items:flex-start;background:#010409;border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:4px">
+    <span style="font-size:14px">${st.icon}</span>
+    <div style="flex:1;min-width:0">
+      <div><span style="color:var(--accent);font-family:ui-monospace,Consolas,monospace;font-size:10px">#${escapeHtml(task.id)}</span> <span style="font-size:12px;color:var(--text)">${escapeHtml(task.subject || 'Untitled')}</span></div>
+      ${task.description ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHtml(task.description)}</div>` : ''}
+    </div>
+    ${task.owner ? `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(110,168,255,0.14);color:var(--accent)">@${escapeHtml(task.owner)}</span>` : ''}
+    ${blocked ? `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(232,183,90,0.14);color:#caa84a">⛔ ${escapeHtml(task.blockedBy!.join(','))}</span>` : ''}
+    <span style="font-size:10px;color:${st.color}">${escapeHtml(task.status || '')}</span>
+  </div>`
+}
+
+function renderTeamCreateTool(block: ContentBlock): string {
+  const input = (block.input || {}) as Record<string, unknown>
+  const result = getExpStructured<{ team_name?: string; team_file_path?: string; lead_agent_id?: string }>(block)
+  const teamName = result?.team_name || String(input.team_name || '')
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span style="font-size:14px">👥</span>
+    <span style="font-size:12px;color:var(--text);font-weight:500">${escapeHtml(teamName)}</span>
+    ${result?.lead_agent_id ? `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(210,96,58,0.15);color:#d2603a">lead: ${escapeHtml(result.lead_agent_id)}</span>` : ''}
+  </div>
+  ${input.description ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">${escapeHtml(String(input.description))}</div>` : ''}
+  ${result?.team_file_path ? `<div style="font-size:10px;color:var(--text3);font-family:ui-monospace,Consolas,monospace;margin-top:2px;word-break:break-all">${escapeHtml(result.team_file_path)}</div>` : ''}`
+}
+
+function renderTeamDeleteTool(block: ContentBlock): string {
+  const result = getExpStructured<{ success?: boolean; message?: string; team_name?: string }>(block)
+  if (!result) return renderToolResult(block.result)
+  const ok = result.success
+  const bg = ok ? 'rgba(63,185,80,0.15)' : 'rgba(232,183,90,0.15)'
+  const color = ok ? '#3fb950' : '#caa84a'
+  return `<div style="display:flex;gap:8px;align-items:flex-start;background:${bg};border-radius:6px;padding:8px 10px;font-size:12px;color:${color}">
+    <span>${ok ? '✅' : '⚠️'}</span>
+    <div>${result.team_name ? `<strong>${escapeHtml(result.team_name)}:</strong> ` : ''}${escapeHtml(result.message || '')}</div>
+  </div>`
+}
+
+function renderSendMessageTool(block: ContentBlock): string {
+  const input = (block.input || {}) as Record<string, unknown>
+  const to = input.to ? String(input.to) : ''
+  const rawMsg = input.message
+  const structuredMsg = typeof rawMsg === 'object' && rawMsg !== null
+    ? (rawMsg as { type?: string; reason?: string; approve?: boolean; feedback?: string })
+    : null
+  const textMsg = typeof rawMsg === 'string' ? rawMsg : String(input.content || '')
+  const summary = input.summary ? String(input.summary) : ''
+  const result = getExpStructured<{ success?: boolean; message?: string; routing?: { sender?: string; target?: string; summary?: string; content?: string } }>(block)
+  const routing = result?.routing
+  const target = routing?.target || (to ? `@${to}` : '')
+  const body = routing?.content || textMsg
+
+  let html = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px">
+    ${routing?.sender ? `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:#161b22;color:var(--text2)">${escapeHtml(routing.sender)}</span>` : ''}
+    <span class="muted">→</span>
+    <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(14,165,233,0.15);color:#0ea5e9">${escapeHtml(target)}</span>
+    ${(summary || routing?.summary) ? `<span class="muted" style="font-style:italic">${escapeHtml(summary || routing?.summary || '')}</span>` : ''}
+  </div>`
+  if (structuredMsg) {
+    html += `<div style="background:#010409;border:1px solid var(--border);border-radius:6px;padding:10px;margin-top:6px;font-size:12px">
+      <div style="color:var(--accent);font-weight:500">${escapeHtml(structuredMsg.type?.replace(/_/g, ' ') || '')}</div>
+      ${typeof structuredMsg.approve === 'boolean' ? `<div style="color:${structuredMsg.approve ? '#3fb950' : '#f85149'}">${structuredMsg.approve ? '✅ approved' : '❌ rejected'}</div>` : ''}
+      ${structuredMsg.reason ? `<div style="color:var(--text3)">${escapeHtml(structuredMsg.reason)}</div>` : ''}
+      ${structuredMsg.feedback ? `<div style="color:var(--text3)">${escapeHtml(structuredMsg.feedback)}</div>` : ''}
+    </div>`
+  }
+  if (body) {
+    html += `<div style="background:#010409;border:1px solid var(--border);border-radius:6px;padding:10px;margin-top:6px;font-size:12px;color:var(--text2);white-space:pre-wrap;word-break:break-word">${escapeHtml(body)}</div>`
+  }
+  if (result?.message) {
+    html += `<div style="font-size:10px;color:var(--text3);margin-top:4px">${result.success === false ? '⚠️ ' : ''}${escapeHtml(result.message)}</div>`
+  }
+  return html
+}
+
+function renderAgentTool(block: ContentBlock): string {
+  const input = (block.input || {}) as Record<string, unknown>
+  const description = input.description ? String(input.description) : ''
+  const subagentType = input.subagent_type ? String(input.subagent_type) : ''
+  const prompt = input.prompt ? String(input.prompt) : ''
+  const result = getExpStructured<{ status?: string; agentId?: string; agentType?: string; content?: Array<{ text?: string }> | string; totalTokens?: number; totalToolUseCount?: number; totalDurationMs?: number }>(block)
+  const resultText = result
+    ? Array.isArray(result.content)
+      ? result.content.map((c) => c.text || '').join('\n')
+      : typeof result.content === 'string' ? result.content : ''
+    : block.result?.stdout || block.result?.content || ''
+
+  let html = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px">
+    ${(subagentType || result?.agentType) ? `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(190,24,93,0.15);color:#e86eaa;font-weight:500">${escapeHtml(subagentType || result?.agentType || '')}</span>` : ''}
+    ${description ? `<span style="color:var(--text)">${escapeHtml(description)}</span>` : ''}
+    ${result?.status ? `<span style="color:${result.status === 'completed' ? '#3fb950' : '#1f6feb'}">· ${escapeHtml(result.status)}</span>` : ''}
+  </div>`
+  if (result && (result.totalTokens || result.totalToolUseCount || result.totalDurationMs)) {
+    const parts: string[] = []
+    if (result.totalToolUseCount != null) parts.push(`${result.totalToolUseCount} tool calls`)
+    if (result.totalTokens != null) parts.push(`${result.totalTokens.toLocaleString()} tokens`)
+    if (result.totalDurationMs != null) parts.push(`${(result.totalDurationMs / 1000).toFixed(1)}s`)
+    html += `<div style="font-size:10px;color:var(--text3);margin-top:4px">${parts.join(' · ')}</div>`
+  }
+  if (prompt) {
+    html += `<div class="code-card" style="margin-top:6px"><div class="code-card-head"><span class="label">Prompt</span></div><pre><code>${escapeHtml(prompt)}</code></pre></div>`
+  }
+  if (resultText) {
+    html += `<div class="code-card" style="margin-top:6px"><div class="code-card-head"><span class="label">Result${result?.agentId ? ` · ${escapeHtml(result.agentId)}` : ''}</span></div><pre><code>${escapeHtml(resultText)}</code></pre></div>`
+  }
+  return html
 }
 
 // =============================================================
@@ -894,6 +1148,26 @@ function renderUserMessage(msg: ParsedMessage): string {
 
   // Hide caveat-only messages
   if (images.length === 0 && isCaveatOnly(text)) return ''
+
+  // Teammate (swarm) messages. parseTeammateMessages already drops lifecycle
+  // noise (idle / terminated / shutdown-approved); if only noise remains, hide
+  // the whole message rather than falling through to raw-text rendering.
+  if (images.length === 0 && text.includes('<teammate-message')) {
+    const teammates = parseTeammateMessages(text)
+    if (teammates.length > 0) {
+      return `
+        <div class="msg-wrap assistant">
+          <div class="msg assistant" style="width:100%;max-width:85%">
+            <div class="msg-head">
+              <span class="role assistant" style="color:#56d4dd">Teammate</span>
+              <span class="time">${escapeHtml(time)}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px">${teammates.map(renderTeammateRow).join('')}</div>
+          </div>
+        </div>`
+    }
+    return ''
+  }
 
   // Slash command rendering
   const cmd = parseSlashCommand(text)
