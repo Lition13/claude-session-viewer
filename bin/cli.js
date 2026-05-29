@@ -21,28 +21,50 @@ function resolveElectron() {
   }
 }
 
+const installScript = path.join(electronPkgDir, 'install.js');
+
+/** Run Electron's installer once with the given extra env; returns true on success. */
+function runInstall(extraEnv) {
+  const result = spawnSync(process.execPath, [installScript], {
+    stdio: 'inherit',
+    cwd: electronPkgDir,
+    env: { ...process.env, ...extraEnv },
+  });
+  if (result.status !== 0) return false;
+  // Clear the require cache so the freshly written path.txt is picked up.
+  delete require.cache[require.resolve('electron')];
+  const p = resolveElectron();
+  return Boolean(p && fs.existsSync(p));
+}
+
 let electron = resolveElectron();
 if (!electron || !fs.existsSync(electron)) {
   console.error('Electron binary not found — finishing installation (one-time, ~150MB download)...');
-  const result = spawnSync(process.execPath, [path.join(electronPkgDir, 'install.js')], {
-    stdio: 'inherit',
-    cwd: electronPkgDir,
-  });
-  if (result.status !== 0) {
+
+  // Attempt 1: default source (github.com), unless the user already set a mirror.
+  let ok = runInstall({});
+
+  // Attempt 2: fall back to the npmmirror CDN. The default GitHub download is
+  // frequently blocked or rate-limited in some regions; this mirror is widely
+  // reachable. Respect an existing ELECTRON_MIRROR if the user set one.
+  if (!ok && !process.env.ELECTRON_MIRROR) {
+    console.error('Default download failed — retrying via mirror (npmmirror.com)...');
+    ok = runInstall({ ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/' });
+  }
+
+  if (!ok) {
     console.error(
       '\nFailed to install the Electron runtime.\n' +
-        'Please check your network/proxy and run:\n' +
-        `  node "${path.join(electronPkgDir, 'install.js')}"\n`
+        'Check your network/proxy, then retry. If you are behind a firewall, set a mirror:\n' +
+        '  ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/" \\\n' +
+        `    node "${installScript}"\n` +
+        '(on Windows PowerShell: $env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"; node "' +
+        installScript +
+        '")\n'
     );
     process.exit(1);
   }
-  // Clear the require cache so the freshly written path.txt is picked up.
-  delete require.cache[require.resolve('electron')];
   electron = resolveElectron();
-  if (!electron || !fs.existsSync(electron)) {
-    console.error('Electron runtime still unavailable after install. Aborting.');
-    process.exit(1);
-  }
 }
 
 const appPath = path.join(__dirname, '..');

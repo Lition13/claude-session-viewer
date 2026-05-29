@@ -6,6 +6,13 @@ All notable changes to this project will be recorded here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.3] - 2026-05-30
+
+### Fixed
+- CLI launcher now retries the Electron binary download via a mirror (`npmmirror.com`) when the default GitHub source fails — common in regions where `github.com` is blocked or rate-limited. Prints actionable `ELECTRON_MIRROR` instructions (bash + PowerShell) if both attempts fail. Respects an existing `ELECTRON_MIRROR` if the user set one.
+
+[1.1.3]: https://github.com/Lition13/claude-session-viewer/releases/tag/v1.1.3
+
 ## [1.1.2] - 2026-05-30
 
 ### Fixed
